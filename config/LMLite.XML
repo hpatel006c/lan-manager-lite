@@ -252,6 +252,12 @@
               <writable>true</writable>
             </parameter>
             <parameter>
+              <name>Demo</name>
+              <type>string(256)</type>
+              <syntax>string</syntax>
+              <writable>true</writable>
+            </parameter>
+            <parameter>
               <name>X_CISCO_COM_RSSI</name>
               <type>int</type>
               <syntax>int</syntax>
@@ -440,6 +446,12 @@
             <parameter>
               <name>Comments</name>
               <type>string(1024)</type>
+              <syntax>string</syntax>
+              <writable>true</writable>
+            </parameter>
+            <parameter>
+              <name>Demo</name>
+              <type>string(256)</type>
               <syntax>string</syntax>
               <writable>true</writable>
             </parameter>

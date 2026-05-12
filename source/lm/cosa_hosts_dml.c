@@ -68,6 +68,7 @@
 #include <time.h>
 #include "ansc_platform.h"
 #include "cosa_hosts_dml.h"
+#include "syscfg/syscfg.h"
 #include "lm_main.h"
 #include "lm_util.h"
 #include "ctype.h"
@@ -1542,6 +1543,27 @@ Host_GetParamStringValue
             return 0;
         }
 
+        if(strcmp(ParamName, "Demo") == 0)
+        {
+            char *mac = pHost->pStringParaValue[LM_HOST_PhysAddressId];
+            if (mac && mac[0])
+            {
+                char syscfg_key[128];
+                char demo_buf[256] = {0};
+                snprintf(syscfg_key, sizeof(syscfg_key), "lmlite_demo_%s", mac);
+                syscfg_get(NULL, syscfg_key, demo_buf, sizeof(demo_buf));
+                AnscCopyString(pValue, demo_buf);
+                LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_DemoId]), demo_buf);
+            }
+            else
+            {
+                pValue[0] = '\0';
+            }
+            pthread_mutex_unlock(&LmHostObjectMutex);
+            CcspTraceDebug(("%s:%d, unlocked LmHostObjectMutex\n",__FUNCTION__,__LINE__));
+            return 0;
+        }
+
     }
 
     return GetParamStringValue_common (pValue, pUlSize, value, rc, &LmHostObjectMutex);
@@ -1724,6 +1746,26 @@ Host_SetParamStringValue
     )
 {
     PLmObjectHost pHost = (PLmObjectHost) hInsContext;
+
+    if (strcmp(ParamName, "Demo") == 0)
+    {
+        char *mac = pHost->pStringParaValue[LM_HOST_PhysAddressId];
+        if (mac && mac[0])
+        {
+            char syscfg_key[128];
+            snprintf(syscfg_key, sizeof(syscfg_key), "lmlite_demo_%s", mac);
+            if (syscfg_set_commit(NULL, syscfg_key, pString) != 0)
+            {
+                AnscTraceWarning(("syscfg_set_commit failed for Demo param\n"));
+                return FALSE;
+            }
+            pthread_mutex_lock(&LmHostObjectMutex);
+            LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_DemoId]), pString);
+            pthread_mutex_unlock(&LmHostObjectMutex);
+            return TRUE;
+        }
+        return FALSE;
+    }
 
     if (strcmp(ParamName, "Comments") == 0)
     {
