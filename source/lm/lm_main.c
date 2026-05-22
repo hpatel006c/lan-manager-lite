@@ -185,10 +185,12 @@ typedef struct _Name_DM
 typedef struct _ValidateHostQData
 {
     char phyAddr[18];
-    char AssociatedDevice[LM_GEN_STR_SIZE];
-    char ssid[LM_GEN_STR_SIZE];
-    int RSSI;
+    char apList  [MAX_MLO_LINKS][LM_GEN_STR_SIZE];
+    char ssidList[MAX_MLO_LINKS][LM_GEN_STR_SIZE];
+    int  rssiList[MAX_MLO_LINKS];
     int Status;
+    int  mloEnable;
+    int linkCount;
 } ValidateHostQData;
 
 typedef struct _RetryHostList
@@ -293,9 +295,9 @@ pthread_mutex_t LmRetryHostListMutex;
 #define STRNCPY_NULL_CHK(x, y, z) if((y) != NULL) strncpy((x),(y),(z)); else  *(unsigned char*)(x) = 0;
 
 LmObjectHosts lmHosts = {
-    .pHostBoolParaName = {"Active","X_RDKCENTRAL-COM_PresenceNotificationEnabled","RDK_PresenceActive"},
+    .pHostBoolParaName = {"Active","X_RDKCENTRAL-COM_PresenceNotificationEnabled","RDK_PresenceActive","X_RDK-MldClient"},
     .pHostIntParaName = {"X_CISCO_COM_ActiveTime", "X_CISCO_COM_InactiveTime", "X_CISCO_COM_RSSI"},
-    .pHostUlongParaName = {"X_CISCO_COM_DeviceType", "X_CISCO_COM_NetworkInterface", "X_CISCO_COM_ConnectionStatus", "X_CISCO_COM_OSType","X_COMCAST-COM_LastChange","RDK_PresenceActiveLastChange"},
+    .pHostUlongParaName = {"X_CISCO_COM_DeviceType", "X_CISCO_COM_NetworkInterface", "X_CISCO_COM_ConnectionStatus", "X_CISCO_COM_OSType","X_COMCAST-COM_LastChange","RDK_PresenceActiveLastChange","X_RDK-MloLinkNumberofEntries"},
     .pHostStringParaName = {"Alias", "PhysAddress", "IPAddress", "DHCPClient", "AssociatedDevice", "Layer1Interface", "Layer3Interface", "HostName",
                                         "X_CISCO_COM_UPnPDevice", "X_CISCO_COM_HNAPDevice", "X_CISCO_COM_DNSRecords", "X_CISCO_COM_HardwareVendor",
                                         "X_CISCO_COM_SoftwareVendor", "X_CISCO_COM_SerialNumbre", "X_CISCO_COM_DefinedDeviceType",
@@ -312,9 +314,9 @@ LmObjectHosts lmHosts = {
 
 #if !defined (RESOURCE_OPTIMIZATION)
 LmObjectHosts XlmHosts = {
-    .pHostBoolParaName = {"Active","X_RDKCENTRAL-COM_PresenceNotificationEnabled","RDK_PresenceActive"},
+    .pHostBoolParaName = {"Active","X_RDKCENTRAL-COM_PresenceNotificationEnabled","RDK_PresenceActive","X_RDK-MldClient"},
     .pHostIntParaName = {"X_CISCO_COM_ActiveTime", "X_CISCO_COM_InactiveTime", "X_CISCO_COM_RSSI"},
-    .pHostUlongParaName = {"X_CISCO_COM_DeviceType", "X_CISCO_COM_NetworkInterface", "X_CISCO_COM_ConnectionStatus", "X_CISCO_COM_OSType","X_COMCAST-COM_LastChange","RDK_PresenceActiveLastChange"},
+    .pHostUlongParaName = {"X_CISCO_COM_DeviceType", "X_CISCO_COM_NetworkInterface", "X_CISCO_COM_ConnectionStatus", "X_CISCO_COM_OSType","X_COMCAST-COM_LastChange","RDK_PresenceActiveLastChange","X_RDK-MloLinkNumberofEntries"},
     .pHostStringParaName = {"Alias", "PhysAddress", "IPAddress", "DHCPClient", "AssociatedDevice", "Layer1Interface", "Layer3Interface", "HostName",
                                         "X_CISCO_COM_UPnPDevice", "X_CISCO_COM_HNAPDevice", "X_CISCO_COM_DNSRecords", "X_CISCO_COM_HardwareVendor",
                                         "X_CISCO_COM_SoftwareVendor", "X_CISCO_COM_SerialNumbre", "X_CISCO_COM_DefinedDeviceType",
@@ -346,8 +348,9 @@ extern pthread_mutex_t PresenceDetectionMutex;
 pthread_mutex_t XLmHostObjectMutex;
 #endif
 
-static void Wifi_ServerSyncHost(char *phyAddr, char *AssociatedDevice, char *ssid, int RSSI, int Status);
+static void Wifi_ServerSyncHost(char *phyAddr, char apList[][LM_GEN_STR_SIZE], char ssidList[][LM_GEN_STR_SIZE], int rssiList[], int Status, int mloEnable, int linkCount);
 static void Host_FreeIPAddress(PLmObjectHost pHost, int version);
+static void Host_FreeMloLinks (PLmObjectHost pHost);
 static void Hosts_SyncDHCP(void);
 static void Sendmsg_dnsmasq(BOOL enablePresenceFeature);
 static void Send_Eth_Host_Sync_Req(void);
@@ -952,6 +955,7 @@ static void Hosts_FreeHost (PLmObjectHost pHost)
     pHost->Layer3Interface = NULL;
     Host_FreeIPAddress(pHost, 4);
     Host_FreeIPAddress(pHost, 6);
+    Host_FreeMloLinks(pHost);   /* free MLO link sub-table */
 
     AnscFreeMemory(pHost);
     pHost = NULL;
@@ -1031,6 +1035,10 @@ static PLmObjectHost XHosts_AddHost (int instanceNum)
     pHost->iIntParaValue[LM_HOST_X_CISCO_COM_RSSIId] = -200;
 
 	pHost->Layer3Interface = NULL;
+    pHost->bBoolParaValue[LM_HOST_X_RDK_MldClientId] = FALSE;
+    pHost->ulUlongParaValue[LM_HOST_X_RDK_MloLinkNumberofEntriesId] = 0;
+    pHost->mloLinkArray = NULL;
+    pHost->numMloLinks  = 0;
 
 	memset(pHost->backupHostname,0,64);
     int i;
@@ -1143,6 +1151,10 @@ static PLmObjectHost Hosts_AddHost (int instanceNum)
 
 		pHost->Layer3Interface = NULL;
     pHost->bBoolParaValue[LM_HOST_PresenceActiveId] = FALSE;
+        pHost->bBoolParaValue[LM_HOST_X_RDK_MldClientId] = FALSE;
+        pHost->ulUlongParaValue[LM_HOST_X_RDK_MloLinkNumberofEntriesId] = 0;
+        pHost->mloLinkArray = NULL;
+        pHost->numMloLinks  = 0;
 
 		memset(pHost->backupHostname,0,64);
 	    int i;
@@ -1478,6 +1490,25 @@ static void Host_FreeIPAddress(PLmObjectHost pHost, int version)
         pCur = NULL;
         *ppHeader = NULL;
     }
+}
+
+static void Host_FreeMloLinks (PLmObjectHost pHost)
+{
+    PLmObjectMloLink pCur  = pHost->mloLinkArray;
+    PLmObjectMloLink pNext = NULL;
+
+    while (pCur != NULL)
+    {
+        pNext = pCur->pNext;
+        if (pCur->layer1Interface)
+            AnscFreeMemory(pCur->layer1Interface);
+        if (pCur->associatedDevice)
+            AnscFreeMemory(pCur->associatedDevice);
+        AnscFreeMemory(pCur);
+        pCur = pNext;
+    }
+    pHost->mloLinkArray = NULL;
+    pHost->numMloLinks  = 0;
 }
 
 static PLmObjectHostIPAddress Add_Update_IPv4Address (PLmObjectHost pHost, char *ipAddress)
@@ -1972,6 +2003,10 @@ static void _get_host_ipaddress(LM_host_t *pDestHost, PLmObjectHost pHost)
 
 static void _get_host_info(LM_host_t *pDestHost, PLmObjectHost pHost)
 {
+    /*CID 340106 - String not null terminated - Fix is added here for
+    API lm_get_all_hosts which is from lmlite code lm_api.c - This code sends the data */
+        memset(pDestHost, 0, sizeof(LM_host_t));
+        
         mac_string_to_array(pHost->pStringParaValue[LM_HOST_PhysAddressId], pDestHost->phyAddr);
         pDestHost->online = (unsigned char)pHost->bBoolParaValue[LM_HOST_ActiveId];
         pDestHost->activityChangeTime = pHost->activityChangeTime;
@@ -2273,6 +2308,7 @@ static void *Event_HandlerThread(void *threadid)
     char buffer[MAX_SIZE + 1];
 	char radio[32];
     BOOL do_dhcpsync = FALSE;
+    int lnk;
 
     /* initialize the queue attributes */
     attr.mq_flags = 0;
@@ -2393,6 +2429,9 @@ static void *Event_HandlerThread(void *threadid)
         else if(EventMsg.MsgType == MSG_TYPE_WIFI)
         {
             memcpy(&hosts,EventMsg.Msg,sizeof(hosts));
+            /* CID 339816 String not null terminated */
+            hosts.phyAddr[sizeof(hosts.phyAddr) - 1] = '\0';
+
             CcspTraceDebug(("%s:%d, Acquiring LmHostObjectMutex\n",__FUNCTION__,__LINE__));
             pthread_mutex_lock(&LmHostObjectMutex);
             CcspTraceDebug(("%s:%d, Acquired LmHostObjectMutex\n",__FUNCTION__,__LINE__));
@@ -2422,42 +2461,130 @@ static void *Event_HandlerThread(void *threadid)
                 
             }
 
-            if(hosts.Status)
+            /* CID 339816  String not NULL terminated */
+            /* null-terminate per-link arrays for safety */
+            for (lnk = 0; lnk < MAX_MLO_LINKS; lnk++)
             {
-				memset(radio,0,sizeof(radio));	
-                convert_ssid_to_radio((char *)hosts.ssid, radio);
-				LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_X_RDKCENTRAL_COM_Layer1Interface]), radio);
-                LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_Layer1InterfaceId]), (const char *)hosts.ssid);
-                LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_AssociatedDeviceId]), (const char *)hosts.AssociatedDevice);
-                pHost->iIntParaValue[LM_HOST_X_CISCO_COM_RSSIId] = hosts.RSSI;
-                pHost->l1unReachableCnt = 1;
-                if ( ! pHost->pStringParaValue[LM_HOST_IPAddressId] )
-                {
-                    CcspTraceWarning(("RDKB_CONNECTED_CLIENTS: Client type is WiFi, MacAddress is %s IPAddr is not updated in ARP\n",pHost->pStringParaValue[LM_HOST_PhysAddressId]));
-                    do_dhcpsync = TRUE;
-               }
+                hosts.apList[lnk][LM_GEN_STR_SIZE - 1]   = '\0';
+                hosts.ssidList[lnk][LM_GEN_STR_SIZE - 1] = '\0';
+            }
 
-                LM_SET_ACTIVE_STATE_TIME(pHost, TRUE);
+            /* reset MLO link table before repopulating */
+            Host_FreeMloLinks(pHost);
+
+            if (hosts.mloEnable)
+            {
+                /* ===== AC2: MLO Client ===== */
+                pHost->bBoolParaValue[LM_HOST_X_RDK_MldClientId] = TRUE;
+
+                /* legacy fields must remain blank (" ") for MLO clients */
+                LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_Layer1InterfaceId]), " ");
+                LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_AssociatedDeviceId]), " ");
+                pHost->iIntParaValue[LM_HOST_X_CISCO_COM_RSSIId] = 0;
+
+                /* populate MloLink.{j} sub-table for each link */
+                for (lnk = 0; lnk < hosts.mloLinkCount; lnk++)
+                {
+                    PLmObjectMloLink pLink = AnscAllocateMemory(sizeof(LmObjectMloLink));
+                    if (pLink)
+                    {
+                        pLink->instanceNum     = pHost->numMloLinks + 1;
+                        pLink->rssi            = hosts.rssiList[lnk];
+                        pLink->layer1Interface = AnscCloneString((char *)hosts.ssidList[lnk]);
+                        if (strncmp((char *)hosts.apList[lnk], "NULL", strlen((char *)hosts.apList[lnk])) == 0)
+                            pLink->associatedDevice = AnscCloneString("");
+                        else
+                            pLink->associatedDevice = AnscCloneString((char *)hosts.apList[lnk]);
+                        pLink->pNext           = NULL;
+                        if (pHost->mloLinkArray == NULL)
+                        {
+                            pHost->mloLinkArray = pLink;
+                        }
+                        else
+                        {
+                            PLmObjectMloLink pTail = pHost->mloLinkArray;
+                            while (pTail->pNext != NULL)
+                                pTail = pTail->pNext;
+                            pTail->pNext = pLink;
+                        }
+                        pHost->numMloLinks++;
+                    }
+                }
+
+                /* set radio from first link for X_RDKCENTRAL_COM_Layer1Interface */
+                if (hosts.mloLinkCount > 0)
+                {
+                    memset(radio, 0, sizeof(radio));
+                    hosts.ssidList[0][LM_GEN_STR_SIZE - 1] = '\0';
+                    convert_ssid_to_radio((char *)hosts.ssidList[0], radio);
+                    LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_X_RDKCENTRAL_COM_Layer1Interface]), radio);
+                }
+
+                pHost->ulUlongParaValue[LM_HOST_X_RDK_MloLinkNumberofEntriesId] = (ULONG)pHost->numMloLinks;
+
+                if (hosts.Status)
+                {
+                    pHost->l1unReachableCnt = 1;
+                    if ( ! pHost->pStringParaValue[LM_HOST_IPAddressId] )
+                    {
+                        CcspTraceWarning(("RDKB_CONNECTED_CLIENTS: Client type is WiFi MLO, MacAddress is %s IPAddr is not updated in ARP\n",pHost->pStringParaValue[LM_HOST_PhysAddressId]));
+                        do_dhcpsync = TRUE;
+                    }
+                    LM_SET_ACTIVE_STATE_TIME(pHost, TRUE);
+                }
+                else
+                {
+                    LM_SET_ACTIVE_STATE_TIME(pHost, FALSE);
+                }
             }
             else
             {
-                /*CID:63986 Array compared against 0*/
-                if( (pHost->pStringParaValue[LM_HOST_Layer1InterfaceId] != NULL) )
+                /* ===== AC3: Non-MLO Client ===== */
+                pHost->bBoolParaValue[LM_HOST_X_RDK_MldClientId] = FALSE;
+                pHost->ulUlongParaValue[LM_HOST_X_RDK_MloLinkNumberofEntriesId] = 0;
+
+                if (hosts.Status)
                 {
-                    if(!strcmp(pHost->pStringParaValue[LM_HOST_Layer1InterfaceId], (const char *)hosts.ssid))
+                    if (hosts.mloLinkCount > 0)
                     {
-                        memset(radio,0,sizeof(radio));
-                        convert_ssid_to_radio((char *)hosts.ssid, radio);
-                        DelAndShuffleAssoDevIndx(pHost);
+                        memset(radio, 0, sizeof(radio));
+                        hosts.ssidList[0][LM_GEN_STR_SIZE - 1] = '\0';
+                        hosts.apList[0][LM_GEN_STR_SIZE - 1] = '\0';
+                        convert_ssid_to_radio((char *)hosts.ssidList[0], radio);
                         LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_X_RDKCENTRAL_COM_Layer1Interface]), radio);
-                        LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_Layer1InterfaceId]), (const char *)hosts.ssid);
-                        //LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_AssociatedDeviceId]), hosts.AssociatedDevice);
-                        LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_AssociatedDeviceId]), " "); // fix for RDKB-19836
-                        LM_SET_ACTIVE_STATE_TIME(pHost, FALSE);
+                        LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_Layer1InterfaceId]), (const char *)hosts.ssidList[0]);
+                        LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_AssociatedDeviceId]), (const char *)hosts.apList[0]);
+                        pHost->iIntParaValue[LM_HOST_X_CISCO_COM_RSSIId] = hosts.rssiList[0];
+                    }
+                    pHost->l1unReachableCnt = 1;
+                    if ( ! pHost->pStringParaValue[LM_HOST_IPAddressId] )
+                    {
+                        CcspTraceWarning(("RDKB_CONNECTED_CLIENTS: Client type is WiFi, MacAddress is %s IPAddr is not updated in ARP\n",pHost->pStringParaValue[LM_HOST_PhysAddressId]));
+                        do_dhcpsync = TRUE;
+                    }
+                    LM_SET_ACTIVE_STATE_TIME(pHost, TRUE);
+                }
+                else
+                {
+                    /*CID:63986 Array compared against 0*/
+                    if ( (pHost->pStringParaValue[LM_HOST_Layer1InterfaceId] != NULL) &&
+                         (hosts.mloLinkCount > 0) )
+                    {
+                        if(!strcmp(pHost->pStringParaValue[LM_HOST_Layer1InterfaceId], (const char *)hosts.ssidList[0]))
+                        {
+                            memset(radio, 0, sizeof(radio));
+                            hosts.ssidList[0][LM_GEN_STR_SIZE - 1] = '\0';
+                            convert_ssid_to_radio((char *)hosts.ssidList[0], radio);
+                            DelAndShuffleAssoDevIndx(pHost);
+                            LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_X_RDKCENTRAL_COM_Layer1Interface]), radio);
+                            LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_Layer1InterfaceId]), (const char *)hosts.ssidList[0]);
+                            LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_AssociatedDeviceId]), " "); // fix for RDKB-19836
+                            LM_SET_ACTIVE_STATE_TIME(pHost, FALSE);
+                        }
                     }
                 }
             }
-            
+
             LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_X_RDKCENTRAL_COM_Parent]), getFullDeviceMac());
             LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_X_RDKCENTRAL_COM_DeviceType]), " ");
             pthread_mutex_unlock(&LmHostObjectMutex);
@@ -2483,6 +2610,9 @@ static void *Event_HandlerThread(void *threadid)
         else if(EventMsg.MsgType == MSG_TYPE_MOCA)
         {
             memcpy(&mhosts,EventMsg.Msg,sizeof(mhosts));
+
+            /* CID 339816 String not null terminated */
+            mhosts.phyAddr[sizeof(mhosts.phyAddr) - 1] = '\0';
             CcspTraceDebug(("%s:%d, Acquiring LmHostObjectMutex\n",__FUNCTION__,__LINE__));
             pthread_mutex_lock(&LmHostObjectMutex);
             CcspTraceDebug(("%s:%d, Acquired LmHostObjectMutex\n",__FUNCTION__,__LINE__));
@@ -2507,6 +2637,11 @@ static void *Event_HandlerThread(void *threadid)
                 }   
             }
 
+            /* CID 339816 String not null terminated */
+            mhosts.ssid[LM_GEN_STR_SIZE - 1] = '\0';
+            mhosts.AssociatedDevice[LM_GEN_STR_SIZE - 1] = '\0';
+            mhosts.parentMac[sizeof(mhosts.parentMac) - 1] = '\0';
+            mhosts.deviceType[sizeof(mhosts.deviceType) - 1] = '\0';
             if(mhosts.Status)
             {
                 LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_Layer1InterfaceId]), (const char *)mhosts.ssid);
@@ -2971,12 +3106,16 @@ static RetryHostList *CreateValidateHostEntry(ValidateHostQData *pValidateHost)
         memset(pHost, 0, sizeof(RetryHostList));
         rc = strcpy_s(pHost->host.phyAddr, sizeof(pHost->host.phyAddr), pValidateHost->phyAddr);
         ERR_CHK(rc);
-        rc = strcpy_s(pHost->host.AssociatedDevice, sizeof(pHost->host.AssociatedDevice),pValidateHost->AssociatedDevice);
+        rc = memcpy_s(pHost->host.apList, sizeof(pHost->host.apList), pValidateHost->apList,   sizeof(pValidateHost->apList));
         ERR_CHK(rc);
-        rc = strcpy_s(pHost->host.ssid, sizeof(pHost->host.ssid),pValidateHost->ssid);
+        rc = memcpy_s(pHost->host.ssidList, sizeof(pHost->host.ssidList), pValidateHost->ssidList, sizeof(pValidateHost->ssidList));
         ERR_CHK(rc);
-        pHost->host.RSSI = pValidateHost->RSSI;
+        rc = memcpy_s(pHost->host.rssiList, sizeof(pHost->host.rssiList), pValidateHost->rssiList, sizeof(pValidateHost->rssiList));
+        ERR_CHK(rc);
+
         pHost->host.Status = pValidateHost->Status;
+        pHost->host.mloEnable = pValidateHost->mloEnable;
+        pHost->host.linkCount = pValidateHost->linkCount;
         pHost->retryCount = 0;
         pHost->next = NULL;
     }
@@ -3025,12 +3164,16 @@ static void UpdateHostRetryValidateList(ValidateHostQData *pValidateHostMsg, int
                  * update info, and reset the retry count 
                  */
                 if (!retryList->host.Status && pValidateHostMsg->Status) {
-                    rc = strcpy_s(retryList->host.AssociatedDevice, sizeof(retryList->host.AssociatedDevice),pValidateHostMsg->AssociatedDevice);
+                    rc = memcpy_s(retryList->host.apList, sizeof(retryList->host.apList),  pValidateHostMsg->apList, sizeof(pValidateHostMsg->apList));
                     ERR_CHK(rc);
-                    rc = strcpy_s(retryList->host.ssid, sizeof(retryList->host.ssid),pValidateHostMsg->ssid);
+                    rc = memcpy_s(retryList->host.ssidList, sizeof(retryList->host.ssidList), pValidateHostMsg->ssidList, sizeof(pValidateHostMsg->ssidList));
                     ERR_CHK(rc);
-                    retryList->host.RSSI = pValidateHostMsg->RSSI;
+                    rc = memcpy_s(retryList->host.rssiList, sizeof(retryList->host.rssiList), pValidateHostMsg->rssiList, sizeof(pValidateHostMsg->rssiList));
+                    ERR_CHK(rc);
+
                     retryList->host.Status = pValidateHostMsg->Status;
+                    retryList->host.mloEnable = pValidateHostMsg->mloEnable;
+                    retryList->host.linkCount = pValidateHostMsg->linkCount;
                 }
                 retryList->retryCount = 0;
             }
@@ -3104,10 +3247,12 @@ static void *ValidateHostRetry_Thread (void *arg)
                 if (TRUE == ValidateHost(retryList->host.phyAddr))
                 {
                     Wifi_ServerSyncHost(retryList->host.phyAddr,
-                                        retryList->host.AssociatedDevice,
-                                        retryList->host.ssid,
-                                        retryList->host.RSSI,
-                                        retryList->host.Status);
+                                        retryList->host.apList,
+                                        retryList->host.ssidList,
+                                        retryList->host.rssiList,
+                                        retryList->host.Status,
+                                        retryList->host.mloEnable,
+                                        retryList->host.linkCount);
                     /* Valide Host. Remove from Retry Validate list */
                     RemoveHostRetryValidateList(prevNode, retryList);
                     retryList = (NULL == prevNode) ? pListHead : prevNode->next;
@@ -3168,10 +3313,12 @@ static void *ValidateHost_Thread (void *arg)
         if (TRUE == ValidateHost(ValidateHostMsg.phyAddr))
         {
             Wifi_ServerSyncHost(ValidateHostMsg.phyAddr,
-                                ValidateHostMsg.AssociatedDevice,
-                                ValidateHostMsg.ssid,
-                                ValidateHostMsg.RSSI,
-                                ValidateHostMsg.Status);
+                                ValidateHostMsg.apList,
+                                ValidateHostMsg.ssidList, 
+                                ValidateHostMsg.rssiList,
+                                ValidateHostMsg.Status,
+                                ValidateHostMsg.mloEnable,
+                                ValidateHostMsg.linkCount);
             /* Valid Host. Remove from retry list if present */
             UpdateHostRetryValidateList(&ValidateHostMsg, ACTION_FLAG_DEL);
         }
@@ -3555,33 +3702,40 @@ int XLM_get_host_info()
 }
 #endif
 
-void Wifi_ServerSyncHost (char *phyAddr, char *AssociatedDevice, char *ssid, int RSSI, int Status)
+void Wifi_ServerSyncHost (char *phyAddr, char apList[][LM_GEN_STR_SIZE], char ssidList[][LM_GEN_STR_SIZE], int rssiList[], int Status, int mloEnable, int linkCount)
 {
-	char *Xpos2 = NULL;
-	char *Xpos5 = NULL;
+    char *Xpos2[MAX_MLO_LINKS] = {NULL};
+    char *Xpos5[MAX_MLO_LINKS] = {NULL};
+    int   isXhs = 0;
 #if !defined (RESOURCE_OPTIMIZATION)
 	char radio[32] 			= {0};
         char telemetryBuff[TELEMETRY_MAX_BUFFER] = { '\0' };
 #endif
 
-	CcspTraceWarning(("%s [%s %s %s %d %d]\n",
+    if (linkCount < 0 || linkCount > MAX_MLO_LINKS)
+    {
+        CcspTraceWarning(("%s: invalid linkCount %d\n", __FUNCTION__, linkCount));
+        return;
+    }
+	CcspTraceWarning(("%s [%s %d %d %d]\n",
 									__FUNCTION__,
 									(NULL != phyAddr) ? phyAddr : "NULL",
-									(NULL != AssociatedDevice) ? AssociatedDevice : "NULL",
-									(NULL != ssid) ? ssid : "NULL",
-									RSSI,
-									Status));
-        /*CID: 71084 Dereference before null check*/
-        if(!ssid)
-           return;
+									Status, mloEnable, linkCount));
+    /*CID: 71084 Dereference before null check*/
+    if (!ssidList)
+        return;
 
-	Xpos2	= strstr( ssid,".3" );
-	Xpos5	= strstr( ssid,".4" );
-
-
-	if( ( NULL != Xpos2 ) || \
-		( NULL != Xpos5 ) 
-	   )
+    /* XHS check — scan all links for .3 or .4 SSID */
+    for (int k = 0; k < linkCount; k++)
+    {
+        Xpos2[k] = strstr(ssidList[k], ".3");
+        Xpos5[k] = strstr(ssidList[k], ".4");
+        if ((NULL != Xpos2[k]) || (NULL != Xpos5[k]))
+        {
+            isXhs = 1;
+        }
+    } 
+    if (isXhs)
 	{
 #if !defined (RESOURCE_OPTIMIZATION)
 		PLmObjectHost pHost;
@@ -3593,16 +3747,66 @@ void Wifi_ServerSyncHost (char *phyAddr, char *AssociatedDevice, char *ssid, int
 			Xlm_wrapper_get_info(pHost);
 
 			pthread_mutex_lock(&XLmHostObjectMutex);
-			convert_ssid_to_radio(ssid, radio);
-			LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_X_RDKCENTRAL_COM_Layer1Interface]), radio);
-			LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_Layer1InterfaceId]), ssid);
-			if(strncmp(AssociatedDevice,"NULL",strlen(AssociatedDevice)) == 0)
-				LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_AssociatedDeviceId]), " ");
-			else
-			LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_AssociatedDeviceId]), AssociatedDevice);
-			pHost->iIntParaValue[LM_HOST_X_CISCO_COM_RSSIId] = RSSI;
+            /* reset MLO link table before repopulating */
+            Host_FreeMloLinks(pHost);
+
+            for (int k = 0; k < linkCount; k++)
+            {
+                if ((NULL == Xpos2[k]) && (NULL == Xpos5[k]))
+                    continue;
+
+                convert_ssid_to_radio(ssidList[k], radio);
+                LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_X_RDKCENTRAL_COM_Layer1Interface]), radio);
+                if (!mloEnable)
+                {
+                    /* non-MLO — populate legacy fields normally */
+                    LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_Layer1InterfaceId]), ssidList[k]);
+                    if (strncmp(apList[k], "NULL", strlen(apList[k])) == 0)
+                        LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_AssociatedDeviceId]), " ");
+                    else
+                        LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_AssociatedDeviceId]), apList[k]);
+                    pHost->iIntParaValue[LM_HOST_X_CISCO_COM_RSSIId] = rssiList[k];
+                }
+                else 
+                {
+                    /* MLO — legacy fields must remain empty */
+                    LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_Layer1InterfaceId]), " ");
+                    LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_AssociatedDeviceId]), " ");
+                    pHost->iIntParaValue[LM_HOST_X_CISCO_COM_RSSIId] = 0;
+
+                    /* populate MloLink.{j} per-link sub-table */
+                    PLmObjectMloLink pLink = AnscAllocateMemory(sizeof(LmObjectMloLink));
+                    if (pLink)
+                    {
+                        pLink->instanceNum   = pHost->numMloLinks + 1;
+                        pLink->rssi          = rssiList[k];
+                        pLink->layer1Interface = AnscCloneString(ssidList[k]);
+                        if (strncmp(apList[k], "NULL", strlen(apList[k])) == 0)
+                            pLink->associatedDevice = AnscCloneString("");
+                        else
+                            pLink->associatedDevice = AnscCloneString(apList[k]);
+                        pLink->pNext         = NULL;
+                        if (pHost->mloLinkArray == NULL)
+                        {
+                            pHost->mloLinkArray = pLink;
+                        }
+                        else
+                        {
+                            PLmObjectMloLink pTail = pHost->mloLinkArray;
+                            while (pTail->pNext != NULL)
+                                pTail = pTail->pNext;
+                            pTail->pNext = pLink;
+                        }
+                        pHost->numMloLinks++;
+                    }
+                }
+            }
+
 			pHost->l1unReachableCnt = 1;
 			pHost->bBoolParaValue[LM_HOST_ActiveId] = Status;
+            pHost->bBoolParaValue[LM_HOST_X_RDK_MldClientId] = mloEnable;
+            pHost->ulUlongParaValue[LM_HOST_X_RDK_MloLinkNumberofEntriesId] = (ULONG)pHost->numMloLinks;
+
 			pHost->activityChangeTime = time((time_t*)NULL);
 			LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_X_RDKCENTRAL_COM_Parent]), getFullDeviceMac());
 			LanManager_CheckCloneCopy(&(pHost->pStringParaValue[LM_HOST_X_RDKCENTRAL_COM_DeviceType]), " ");
@@ -3663,21 +3867,24 @@ void Wifi_ServerSyncHost (char *phyAddr, char *AssociatedDevice, char *ssid, int
 
 		LM_wifi_wsta_t hosts;
 		memset(&hosts, 0, sizeof(hosts));
-		if (AssociatedDevice) {
-                    /*CID:135530 Buffer not null terminated*/
-		    strncpy((char *)hosts.AssociatedDevice, AssociatedDevice,
-			sizeof(hosts.AssociatedDevice)-1);
-                   hosts.AssociatedDevice[sizeof(hosts.AssociatedDevice)-1] = '\0';
-		}
+		
 		if (phyAddr) {
 		    strncpy((char *)hosts.phyAddr, phyAddr, sizeof(hosts.phyAddr));
 		}
 		hosts.phyAddr[17] = '\0';
-		if (ssid) {
-		    strncpy((char *)hosts.ssid, ssid, sizeof(hosts.ssid));
-		}
-		hosts.RSSI = RSSI;
-		hosts.Status = Status;
+		
+        hosts.Status = Status;
+        hosts.mloEnable = mloEnable;
+        hosts.mloLinkCount = linkCount;
+
+        for (int j = 0; j < linkCount; j++)
+        {
+            strncpy((char *)hosts.apList[j], apList[j], sizeof(hosts.apList[j])-1);
+            hosts.apList[j][sizeof(hosts.apList[j])-1] = '\0';
+            strncpy((char *)hosts.ssidList[j], ssidList[j], sizeof(hosts.ssidList[j])-1);
+            hosts.ssidList[j][sizeof(hosts.ssidList[j])-1] = '\0';
+            hosts.rssiList[j] = rssiList[j];
+        }
 		EventQData EventMsg;
 		mqd_t mq;
         char buffer[MAX_SIZE];
@@ -3694,19 +3901,22 @@ void Wifi_ServerSyncHost (char *phyAddr, char *AssociatedDevice, char *ssid, int
 	}
 }
 
-void Wifi_Server_Sync_Function( char *phyAddr, char *AssociatedDevice, char *ssid, int RSSI, int Status )
+void Wifi_Server_Sync_Function( char *phyAddr, char apList[][LM_GEN_STR_SIZE], char ssidList[][LM_GEN_STR_SIZE], int rssiList[], int Status, int mloEnable, int linkCount)
 {
 	ValidateHostQData ValidateHostMsg;
 	memset(&ValidateHostMsg, 0, sizeof(ValidateHostQData));
 	mqd_t mq;
 
-	CcspTraceWarning(("%s [%s %s %s %d %d]\n",
+    if (linkCount < 0 || linkCount > MAX_MLO_LINKS)
+    {
+        CcspTraceWarning(("%s: invalid linkCount %d\n", __FUNCTION__, linkCount));
+        return;
+    }
+	CcspTraceWarning(("%s [%s %d %d]\n",
 						__FUNCTION__,
 						(NULL != phyAddr) ? phyAddr : "NULL",
-						(NULL != AssociatedDevice) ? AssociatedDevice : "NULL",
-						(NULL != ssid) ? ssid : "NULL",
-						RSSI,
-						Status));
+						Status, mloEnable));
+
 	mq = mq_open(VALIDATE_QUEUE_NAME, O_WRONLY);
     CHECK((mqd_t)-1 != mq);
 
@@ -3715,18 +3925,18 @@ void Wifi_Server_Sync_Function( char *phyAddr, char *AssociatedDevice, char *ssi
 	strncpy(ValidateHostMsg.phyAddr, phyAddr, sizeof(ValidateHostMsg.phyAddr)-1);
 	ValidateHostMsg.phyAddr[sizeof(ValidateHostMsg.phyAddr)-1] = '\0';
     }
-    if(AssociatedDevice != NULL)
+    for (int j = 0; j < linkCount; j++)
     {
-	strncpy(ValidateHostMsg.AssociatedDevice, AssociatedDevice, sizeof(ValidateHostMsg.AssociatedDevice)-1);
-	ValidateHostMsg.AssociatedDevice[sizeof(ValidateHostMsg.AssociatedDevice)-1] = '\0';
+        strncpy(ValidateHostMsg.apList[j],   apList[j],   sizeof(ValidateHostMsg.apList[j])-1);
+        ValidateHostMsg.apList[j][sizeof(ValidateHostMsg.apList[j])-1] = '\0';
+        strncpy(ValidateHostMsg.ssidList[j], ssidList[j], sizeof(ValidateHostMsg.ssidList[j])-1);
+        ValidateHostMsg.ssidList[j][sizeof(ValidateHostMsg.ssidList[j])-1] = '\0';
+        ValidateHostMsg.rssiList[j] = rssiList[j];
     }
-    if(ssid != NULL)
-    {
-	strncpy(ValidateHostMsg.ssid, ssid, sizeof(ValidateHostMsg.ssid)-1);
-	ValidateHostMsg.ssid[sizeof(ValidateHostMsg.ssid)-1] = '\0';
-    }
-    ValidateHostMsg.RSSI = RSSI;
+
     ValidateHostMsg.Status = Status;
+    ValidateHostMsg.mloEnable = mloEnable;
+    ValidateHostMsg.linkCount = linkCount;
 
 	CHECK(0 <= mq_send(mq, (char *)&ValidateHostMsg, MAX_SIZE_VALIDATE_QUEUE, 0));
 	CHECK((mqd_t)-1 != mq_close(mq));
@@ -4077,17 +4287,24 @@ int Hosts_DisablePresenceDetectionTask()
     char tmpmac[64];
     char dbParam[128];
     int i = 0;
+
+    /* CID 559858 Check of thread-shared field evades lock acquisition */
+    CcspTraceDebug(("%s:%d, Acquiring LmHostObjectMutex\n",__FUNCTION__,__LINE__));
+    pthread_mutex_lock(&LmHostObjectMutex);
+    CcspTraceDebug(("%s:%d, Acquired LmHostObjectMutex\n",__FUNCTION__,__LINE__));
     if (!lmHosts.enablePresence)
     {
+        pthread_mutex_unlock(&LmHostObjectMutex);
+        CcspTraceDebug(("%s:%d, unlocked LmHostObjectMutex\n",__FUNCTION__,__LINE__));
         CcspTraceWarning(("RDKB_PRESENCE: Presence Detection already disabled !!!\n"));
         return 0;
     }
     // clear all param related to presence.
     Sendmsg_dnsmasq(FALSE);
     syscfg_set(NULL, "notify_presence_webpa", "false");
-    CcspTraceDebug(("%s:%d, Acquiring LmHostObjectMutex\n",__FUNCTION__,__LINE__));
-    pthread_mutex_lock(&LmHostObjectMutex);
-    CcspTraceDebug(("%s:%d, Acquired LmHostObjectMutex\n",__FUNCTION__,__LINE__));
+    //CcspTraceDebug(("%s:%d, Acquiring LmHostObjectMutex\n",__FUNCTION__,__LINE__));
+    //pthread_mutex_lock(&LmHostObjectMutex);
+    //CcspTraceDebug(("%s:%d, Acquired LmHostObjectMutex\n",__FUNCTION__,__LINE__));
     lmHosts.enablePresence = FALSE;
     for(i = 0; i < lmHosts.numHost; i++)
     {
@@ -4321,120 +4538,168 @@ static void *UpdateAndSendHostIPAddress_Thread(void *arg)
             pthread_cond_wait(&LmNotifyCond, &LmRetryNotifyHostListMutex);
         }
 
+        /* FIX: Detach list and unlock before acquiring LmHostObjectMutex
+           to avoid lock-order inversion */
+        RetryNotifyHostList *localHead = pNotifyListHead;
+        pNotifyListHead = NULL;
+        pthread_mutex_unlock(&LmRetryNotifyHostListMutex);
+
         RetryNotifyHostList *prev = NULL;
-        RetryNotifyHostList *curr = pNotifyListHead;
+        RetryNotifyHostList *curr = localHead;
+        RetryNotifyHostList *localTail = NULL;
 
         while (curr != NULL) {
 
             bool completed = false;
             LMPresenceNotifyAddressInfo *ctx = curr->ctx;
 
+            /* FIX: Free previous allocations before overwriting (for retry case)
+               These belong to per-node context, no need to hold LmHostObjectMutex */
+            if (NULL != ctx->ipv4)
+                free(ctx->ipv4);
+            if (NULL != ctx->physAddr)
+                free(ctx->physAddr);
+            if (NULL != ctx->hostName)
+                free(ctx->hostName);
+            ctx->ipv4 = NULL;
+            ctx->physAddr = NULL;
+            ctx->hostName = NULL;
+
             // Check IPv4
-	    pthread_mutex_lock (&LmHostObjectMutex);
+            CcspTraceDebug(("%s:%d, Acquiring LmHostObjectMutex\n",__FUNCTION__,__LINE__));
+            pthread_mutex_lock (&LmHostObjectMutex);
+            CcspTraceDebug(("%s:%d, Acquired LmHostObjectMutex\n",__FUNCTION__,__LINE__));
             PLmObjectHost pHost = ctx->pHost;
-	    if (!pHost) {
-		/* Host pointer gone: remove node and free it */
-		pthread_mutex_unlock(&LmHostObjectMutex);
+            if (!pHost) {
+                /* Host pointer gone: remove node and free it */
+                pthread_mutex_unlock(&LmHostObjectMutex);
+                CcspTraceDebug(("%s:%d, unlocked LmHostObjectMutex\n",__FUNCTION__,__LINE__));
 
-		if (prev) {
-		    prev->next = curr->next;
-		} else {
-		    pNotifyListHead = curr->next;
-		}
+                if (prev) {
+                    prev->next = curr->next;
+                } else {
+                    localHead = curr->next;
+                }
 
-		RetryNotifyHostList *toDelete = curr;
-		curr = curr->next;
+                RetryNotifyHostList *toDelete = curr;
+                curr = curr->next;
 
-		if (toDelete->ctx) {
-		    /* if ctx owned any strings, free them; ctx should be freshly allocated earlier */
-		    free(toDelete->ctx->ipv4);
-		    free(toDelete->ctx->physAddr);
-		    free(toDelete->ctx->hostName);
-		    free(toDelete->ctx);
-		}
-		free(toDelete);
-		continue;
-	    }
+                if (toDelete->ctx) {
+                    free(toDelete->ctx);
+                }
+                free(toDelete);
+                continue;
+            }
 
-	    if (pHost->pStringParaValue[LM_HOST_IPAddressId]) {
-		ctx->ipv4 = strdup(pHost->pStringParaValue[LM_HOST_IPAddressId]);
-	    } else {
-		ctx->ipv4 = NULL;
-	    }
-	    if (pHost->pStringParaValue[LM_HOST_PhysAddressId]) {
-		ctx->physAddr = strdup(pHost->pStringParaValue[LM_HOST_PhysAddressId]);
-	    } else {
-		ctx->physAddr = NULL;
-	    }
-	    if (pHost->pStringParaValue[LM_HOST_HostNameId]) {
-		ctx->hostName = strdup(pHost->pStringParaValue[LM_HOST_HostNameId]);
-	    } else {
-		ctx->hostName = NULL;
-	    }
-	    if ((pHost->pStringParaValue[LM_HOST_IPAddressId] && ctx->ipv4 == NULL) ||
-		    (pHost->pStringParaValue[LM_HOST_PhysAddressId] && ctx->physAddr == NULL) ||
-		    (pHost->pStringParaValue[LM_HOST_HostNameId] && ctx->hostName == NULL)) {
-		CcspTraceWarning(("Memory allocation failed for ipv4, physAddr, or hostName in %s at line %d\n", __FUNCTION__, __LINE__));
-		free(ctx->ipv4);
-		free(ctx->physAddr);
-		free(ctx->hostName);
-		pthread_mutex_unlock (&LmHostObjectMutex);
-		// Remove this node from the list and free its memory
-		if (prev) {
-		    prev->next = curr->next;
-		} else {
-		    pNotifyListHead = curr->next;
-		}
-		RetryNotifyHostList *toDelete = curr;
-		curr = curr->next;
-		if (toDelete->ctx) {
-		    free(toDelete->ctx);
-		}
-		free(toDelete);
-		continue;
-	    }
-	    pthread_mutex_unlock (&LmHostObjectMutex);
-	    if (ctx->ipv4 ) {
-		completed = true;
-	    } else if (++curr->retry_count > IP_MAX_RETRIES) { // Increment the retry_count per host 
-		CcspTraceWarning(("Retry limit exceeded for host, removing.\n"));
-		completed = true;
-	    }
+            if (pHost->pStringParaValue[LM_HOST_IPAddressId]) {
+                ctx->ipv4 = strdup(pHost->pStringParaValue[LM_HOST_IPAddressId]);
+            } else {
+                ctx->ipv4 = NULL;
+            }
+            if (pHost->pStringParaValue[LM_HOST_PhysAddressId]) {
+                ctx->physAddr = strdup(pHost->pStringParaValue[LM_HOST_PhysAddressId]);
+            } else {
+                ctx->physAddr = NULL;
+            }
+            if (pHost->pStringParaValue[LM_HOST_HostNameId]) {
+                ctx->hostName = strdup(pHost->pStringParaValue[LM_HOST_HostNameId]);
+            } else {
+                ctx->hostName = NULL;
+            }
+            if ((pHost->pStringParaValue[LM_HOST_IPAddressId] && ctx->ipv4 == NULL) ||
+                    (pHost->pStringParaValue[LM_HOST_PhysAddressId] && ctx->physAddr == NULL) ||
+                    (pHost->pStringParaValue[LM_HOST_HostNameId] && ctx->hostName == NULL)) {
+                CcspTraceWarning(("Memory allocation failed for ipv4, physAddr, or hostName in %s at line %d\n", __FUNCTION__, __LINE__));
+                if (NULL != ctx->ipv4)
+                    free(ctx->ipv4);
+                if (NULL != ctx->physAddr)
+                    free(ctx->physAddr);
+                if (NULL != ctx->hostName)
+                    free(ctx->hostName);
 
-	    if (completed){
-		// If IP addresses are obtained or retry_count exceeded 
-		Send_PresenceNotification(
-			ctx->interface,
-			ctx->physAddr,
-			ctx->status,
-			ctx->hostName,
-			ctx->ipv4
-			);
-		CcspTraceWarning(("Notification sent from %s, line:%d\n", __FUNCTION__, __LINE__));
+                pthread_mutex_unlock (&LmHostObjectMutex);
+                CcspTraceDebug(("%s:%d, unlocked LmHostObjectMutex\n",__FUNCTION__,__LINE__));
 
+                // Remove this node from the list and free its memory
+                if (prev) {
+                    prev->next = curr->next;
+                } else {
+                    localHead = curr->next;
+                }
+                RetryNotifyHostList *toDelete = curr;
+                curr = curr->next;
+                if (toDelete->ctx) {
+                    free(toDelete->ctx);
+                }
+                free(toDelete);
+                continue;
+            }
+            pthread_mutex_unlock (&LmHostObjectMutex);
+            CcspTraceDebug(("%s:%d, unlocked LmHostObjectMutex\n",__FUNCTION__,__LINE__));
+            if (ctx->ipv4 ) {
+                completed = true;
+            } else {
+                pthread_mutex_lock(&LmRetryNotifyHostListMutex);   /* CID 745538 */
+                bool retryExceeded = (++curr->retry_count > IP_MAX_RETRIES);
+                pthread_mutex_unlock(&LmRetryNotifyHostListMutex);
+                if (retryExceeded) {
+                    CcspTraceWarning(("Retry limit exceeded for host, removing.\n"));
+                    completed = true;
+                }
+            }
+
+            if (completed){
+                // If IP addresses are obtained or retry_count exceeded
+                Send_PresenceNotification(
+                        ctx->interface,
+                        ctx->physAddr,
+                        ctx->status,
+                        ctx->hostName,
+                        ctx->ipv4
+                        );
+                CcspTraceWarning(("Notification sent from %s, line:%d\n", __FUNCTION__, __LINE__));
+
+                /* CID 745538 LOCK_EVASION: Guard all ->next field reads and writes with
+                   LmRetryNotifyHostListMutex, consistent with re-attachment block
+                   where localTail->next is also modified under the same lock.
+                   free() calls are left outside the lock as they do not access
+                   list internals. */
+                pthread_mutex_lock(&LmRetryNotifyHostListMutex);
                 // Deletion logic
                 if (prev) {
                     prev->next = curr->next;
                 } else {
                     // If it is head node
-                    pNotifyListHead = curr->next;
+                    localHead = curr->next;
                 }
 
                 // Delete the node as the notification is sent for the node
                 RetryNotifyHostList *toDelete = curr;
                 curr = curr->next;
+                pthread_mutex_unlock(&LmRetryNotifyHostListMutex);
 
                 if (toDelete->ctx) {
-		    free(toDelete->ctx->ipv4);
-		    free(toDelete->ctx->physAddr);
-		    free(toDelete->ctx->hostName);
+                    free(toDelete->ctx->ipv4);
+                    free(toDelete->ctx->physAddr);
+                    free(toDelete->ctx->hostName);
                     free(toDelete->ctx); // memory allocated for LMPresenceNotifyAddressInfo is freed
                 }
                 free(toDelete);
             } else {
+                /* CID 745538 LOCK_EVASION */
+                pthread_mutex_lock(&LmRetryNotifyHostListMutex);
+                localTail = curr; /* track tail for O(1) re-attach */
                 prev = curr;
                 curr = curr->next; // Move to next host
+                pthread_mutex_unlock(&LmRetryNotifyHostListMutex);
             }
+        }
+
+        /* FIX: Re-attach remaining retry nodes back to the shared list (O(1)) */
+        pthread_mutex_lock(&LmRetryNotifyHostListMutex);
+        if (localHead && localTail) {
+            localTail->next = pNotifyListHead;
+            pNotifyListHead = localHead;
         }
         // Instead of sleeping outside the mutex, use pthread_cond_timedwait to wait for new items or timeout
         struct timespec ts;
@@ -4457,10 +4722,13 @@ int Hosts_PresenceHandling(PLmObjectHost pHost, HostPresenceDetection presencest
 
     char interface[32] = {0};
 
+    CcspTraceDebug(("%s:%d, Acquiring LmHostObjectMutex\n",__FUNCTION__,__LINE__));
     pthread_mutex_lock(&LmHostObjectMutex);
+    CcspTraceDebug(("%s:%d, Acquired LmHostObjectMutex\n",__FUNCTION__,__LINE__));
     if (!pHost)
     {
-	pthread_mutex_unlock(&LmHostObjectMutex);
+        pthread_mutex_unlock(&LmHostObjectMutex);
+        CcspTraceDebug(("%s:%d, unlocked LmHostObjectMutex\n",__FUNCTION__,__LINE__));
         return -1;
     }
     if (HOST_PRESENCE_JOIN == presencestatus)    
@@ -4473,7 +4741,8 @@ int Hosts_PresenceHandling(PLmObjectHost pHost, HostPresenceDetection presencest
         }
         else
         {
-	    pthread_mutex_unlock(&LmHostObjectMutex);
+            pthread_mutex_unlock(&LmHostObjectMutex);
+            CcspTraceDebug(("%s:%d, unlocked LmHostObjectMutex\n",__FUNCTION__,__LINE__));
             return 0;
         }
 
@@ -4487,13 +4756,15 @@ int Hosts_PresenceHandling(PLmObjectHost pHost, HostPresenceDetection presencest
         }
         else
         {
-	    pthread_mutex_unlock(&LmHostObjectMutex);
+            pthread_mutex_unlock(&LmHostObjectMutex);
+            CcspTraceDebug(("%s:%d, unlocked LmHostObjectMutex\n",__FUNCTION__,__LINE__));
             return 0;
         }
     }
     if (!pHost->bBoolParaValue[LM_HOST_PresenceNotificationEnabledId])
     {
-	pthread_mutex_unlock(&LmHostObjectMutex);
+        pthread_mutex_unlock(&LmHostObjectMutex);
+        CcspTraceDebug(("%s:%d, unlocked LmHostObjectMutex\n",__FUNCTION__,__LINE__));
         return -1;
     }
     /*CID: 63335 Array compared against 0*/
@@ -4504,8 +4775,13 @@ int Hosts_PresenceHandling(PLmObjectHost pHost, HostPresenceDetection presencest
     } else {
         CcspTraceError(("Error in syscfg_get for notify_presence_webpa"));
     }
-
-    if (notify_to_webpa)
+    if (FALSE == notify_to_webpa)
+    {
+        pthread_mutex_unlock(&LmHostObjectMutex);
+        CcspTraceDebug(("%s:%d, unlocked LmHostObjectMutex\n",__FUNCTION__,__LINE__));
+        return 0;
+    }
+    if (TRUE == notify_to_webpa)
     {
 
         if(pHost->pStringParaValue[LM_HOST_Layer1InterfaceId] != NULL)
@@ -4533,15 +4809,17 @@ int Hosts_PresenceHandling(PLmObjectHost pHost, HostPresenceDetection presencest
         // Allocate context and populate
         LMPresenceNotifyAddressInfo *ctx = calloc(1, sizeof(LMPresenceNotifyAddressInfo));
         if (!ctx)
-	{
-	    pthread_mutex_unlock(&LmHostObjectMutex);
-	    return -1;
-	}
-	if (pHost)
-	{
-	    ctx->pHost = pHost;
-	}
-	pthread_mutex_unlock(&LmHostObjectMutex);
+        {
+            pthread_mutex_unlock(&LmHostObjectMutex);
+            CcspTraceDebug(("%s:%d, unlocked LmHostObjectMutex\n",__FUNCTION__,__LINE__));
+            return -1;
+        }
+        if (pHost)
+        {
+            ctx->pHost = pHost;
+        }
+        pthread_mutex_unlock(&LmHostObjectMutex);
+        CcspTraceDebug(("%s:%d, unlocked LmHostObjectMutex\n",__FUNCTION__,__LINE__));
         strncpy(ctx->interface, interface, sizeof(ctx->interface) - 1);
         ctx->interface[sizeof(ctx->interface) - 1] = '\0'; // ensure null-termination
         ctx->status = status;
@@ -4562,7 +4840,7 @@ int Hosts_PresenceHandling(PLmObjectHost pHost, HostPresenceDetection presencest
         if (worker_thread_running) {
             pthread_cond_signal(&LmNotifyCond);
         }
-        
+
         // Start worker thread once, protected by mutex to avoid race condition
         if (!worker_thread_running) {
             CcspTraceWarning(("%s UpdateAndSendHostIPAddress_Thread creation line:%d\n", __FUNCTION__, __LINE__));

@@ -126,6 +126,11 @@ COSA_Init
     pPlugInfo->RegisterFunction(pPlugInfo->hContext, "Host_IPv6Address_GetParamUlongValue",  Host_IPv6Address_GetParamUlongValue);
     pPlugInfo->RegisterFunction(pPlugInfo->hContext, "Host_IPv6Address_GetParamStringValue",  Host_IPv6Address_GetParamStringValue);
 
+    pPlugInfo->RegisterFunction(pPlugInfo->hContext, "Host_MloLink_GetEntryCount",       Host_MloLink_GetEntryCount);
+    pPlugInfo->RegisterFunction(pPlugInfo->hContext, "Host_MloLink_GetEntry",            Host_MloLink_GetEntry);
+    pPlugInfo->RegisterFunction(pPlugInfo->hContext, "Host_MloLink_GetParamIntValue",    Host_MloLink_GetParamIntValue);
+    pPlugInfo->RegisterFunction(pPlugInfo->hContext, "Host_MloLink_GetParamStringValue", Host_MloLink_GetParamStringValue);
+
 	/*Register XHS data model apis*/
 #if !defined (RESOURCE_OPTIMIZATION)
     pPlugInfo->RegisterFunction(pPlugInfo->hContext, "XHosts_GetParamUlongValue",  XHosts_GetParamUlongValue);
@@ -151,10 +156,6 @@ COSA_Init
     pPlugInfo->RegisterFunction(pPlugInfo->hContext, "XHost_IPv6Address_GetParamStringValue",  XHost_IPv6Address_GetParamStringValue);
 #endif
 
-#if defined (RDKB_EXTENDER_ENABLED)
-    syscfg_get(NULL, "Device_Mode", dev_Mode, sizeof(dev_Mode));
-    if (atoi(dev_Mode) == 0)
-#endif
     {
         pPlugInfo->RegisterFunction(pPlugInfo->hContext, "NetworkDevicesStatus_GetParamUlongValue",  NetworkDevicesStatus_GetParamUlongValue);
         pPlugInfo->RegisterFunction(pPlugInfo->hContext, "NetworkDevicesStatus_GetParamBoolValue",  NetworkDevicesStatus_GetParamBoolValue);

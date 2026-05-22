@@ -250,7 +250,7 @@ WAN_INTERFACE GetEthWANIndex(VOID)
         if ((rc == EOK) && (!ind))
         {
             WTC_LOG_INFO("EWAN Mode");
-#if  defined (_SCER11BEL_PRODUCT_REQ_)
+#if  defined (_SCER11BEL_PRODUCT_REQ_) || defined (_SCXF11BFL_PRODUCT_REQ_)
             return EWAN - 1;
 #else
             return EWAN;
@@ -783,7 +783,7 @@ pstDSCPInfo_t InsertClient(pstDSCPInfo_t DscpTree, pDSCP_list_t CliList)
                   {
                     if( ((INT)(DscpTree->MemorySlab - cliIndex)) < 0 || resetMemorySlab )
                     {
-                        if ( !(DscpTree->MemorySlab = SetMemoryslab(cliIndex)) )
+                        if ( !((INT)(DscpTree->MemorySlab = SetMemoryslab(cliIndex))) )
                         {
                             DscpTree->NumClients = 0;
                         }
@@ -819,7 +819,8 @@ pstDSCPInfo_t InsertClient(pstDSCPInfo_t DscpTree, pDSCP_list_t CliList)
                       WTC_LOG_INFO("ClientList is NULL");
                       return DscpTree;
                     }
-                    for(UINT i=0; i<cliIndex; i++)
+                    /* Number of clients associated with the DSCP value in DSCP_Element. Maximum value for numClients is 255 range [ 0-255] */
+                    for(UINT i=0; (i<255 && i<cliIndex); i++) // CID 560298 Overflowed array index read
                     {
                         UINT j;
                         for(j=0; j<dscpIndex; j++)
@@ -868,7 +869,7 @@ pstDSCPInfo_t InsertClient(pstDSCPInfo_t DscpTree, pDSCP_list_t CliList)
                     // Add new client entries
                     if (cliIndex > count)
                     {
-                        for(UINT i=0; i<cliIndex; i++)
+                        for(UINT i=0; (i<255 && i<cliIndex); i++) // CID 560298 Overflowed array index read
                         {
                             UINT j;
                             for(j=0; j<DscpTree->NumClients; j++)
@@ -889,13 +890,13 @@ pstDSCPInfo_t InsertClient(pstDSCPInfo_t DscpTree, pDSCP_list_t CliList)
                             //New Client addition
                             if (j == DscpTree->NumClients)
                             {
-                                memcpy(DscpTree->ClientList[j].Mac,
-                                       CliList->DSCP_Element[DscpTree->Dscp].Client[i].mac,
-                                       sizeof(CliList->DSCP_Element[DscpTree->Dscp].Client[i].mac));
-                                DscpTree->ClientList[j].RxBytes =
-                                          CliList->DSCP_Element[DscpTree->Dscp].Client[i].rxBytes;
-                                DscpTree->ClientList[j].TxBytes =
-                                          CliList->DSCP_Element[DscpTree->Dscp].Client[i].txBytes;
+                                memcpy_s(DscpTree->ClientList[j].Mac,
+                                         sizeof(DscpTree->ClientList[j].Mac),
+                                         CliList->DSCP_Element[DscpTree->Dscp].Client[i].mac,
+                                         sizeof(DscpTree->ClientList[j].Mac) - 1);
+                                DscpTree->ClientList[j].Mac[sizeof(DscpTree->ClientList[j].Mac) - 1] = '\0';
+                                DscpTree->ClientList[j].RxBytes = 0;
+                                DscpTree->ClientList[j].TxBytes = 0;
                                 DscpTree->ClientList[j].RxBytesTot =
                                           CliList->DSCP_Element[DscpTree->Dscp].Client[i].rxBytes;
                                 DscpTree->ClientList[j].TxBytesTot =
