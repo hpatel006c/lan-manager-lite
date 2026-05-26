@@ -1437,6 +1437,7 @@ int lm_wrapper_get_arp_entries (char netName[LM_NETWORK_NAME_SIZE], int *pCount,
 
         if ( hosts == NULL )
         {
+            fclose(fp);
             unlink(ARP_CACHE_FILE);
             *pCount = 0;
             CcspTraceError(("unlinking ARP cache file at %s -  %d\n", __FILE__,__LINE__));
@@ -1536,6 +1537,7 @@ void getAddressSource(char *physAddress, char *pAddressSource)
 
    }
 
+    fclose(fp);
     fp=NULL;
 memset(buf,0,sizeof(buf));
    if ( (fp=fopen(DNSMASQ_RESERVED_FILE, "r")) == NULL )
@@ -1566,6 +1568,7 @@ memset(buf,0,sizeof(buf));
 	}
 
    }
+    fclose(fp);
    if(rc == -1)
    {
      rc = STRCPY_S_NOCLOBBER(pAddressSource, 20,"Static");
@@ -1937,15 +1940,6 @@ void lm_wrapper_get_dhcpv4_client()
     PLmObjectHost pHost;
     errno_t rc = -1;
 
-    if (access("/tmp/sim_file_leak", F_OK) == 0)
-    {
-        int i;
-        for (i = 0; i < 100; i++)
-        {
-            fopen(DNSMASQ_LEASES_FILE, "r");
-        }
-    }
-
     if ( (fp = fopen(DNSMASQ_LEASES_FILE, "r")) == NULL )
     {
         return;
@@ -2050,6 +2044,8 @@ void lm_wrapper_get_dhcpv4_client()
         releasePresenceLocks();
         CcspTraceDebug(("%s:%d, released presence locks \n",__FUNCTION__,__LINE__));
     }
+
+    fclose(fp);
 
     return;
 }
@@ -2164,6 +2160,8 @@ void lm_wrapper_get_dhcpv4_reserved()
         releasePresenceLocks();
         CcspTraceDebug(("%s:%d, released presence locks \n",__FUNCTION__,__LINE__));
     }
+
+    fclose(fp);
 
     return;
 }
